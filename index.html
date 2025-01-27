@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>抽獎系統 - 一次抽 N 筆</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: sans-serif;
+      text-align: center;
+      color: #fff;
+      background-color: #000; /* 確保在影片加載前或不支持影片的瀏覽器上有背景色 */
+    }
+
+    /* 影片背景樣式 */
+    #video-background {
+      position: fixed;
+      right: 0;
+      bottom: 0;
+      min-width: 100%;
+      min-height: 100%;
+      z-index: -1; /* 確保影片在內容後面 */
+    }
+
+    /* 內容樣式 (確保文字和按鈕在影片上可見) */
+    .content-overlay {
+      position: relative;
+      z-index: 1;
+    }
+
+    h1 {
+      margin-top: 20px;
+      background-color: rgba(0, 0, 0, 0.7);
+      padding: 5px 10px;
+      display: inline-block;
+      border-radius: 5px;
+    }
+
+    #controls {
+      margin: 20px;
+    }
+
+    button {
+      font-size: 1rem;
+      padding: 10px 20px;
+      margin: 10px;
+      cursor: pointer;
+    }
+
+    input[type="number"] {
+      width: 80px;
+      font-size: 1rem;
+      text-align: center;
+    }
+
+    .spin {
+      transform: rotate(720deg);
+    }
+
+    #winner {
+      margin-top: 20px;
+      font-size: 1.2rem;
+      min-height: 1.5em;
+      background-color: rgba(0, 0, 0, 0.7);
+      padding: 5px 10px;
+      display: inline-block;
+      border-radius: 5px;
+    }
+
+    #musicBtn, #updateMusicBtn {
+      position: fixed;
+      top: 20px;
+      background-color: rgba(0, 0, 0, 0.5);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    #musicBtn {
+      right: 120px;
+    }
+
+    #updateMusicBtn {
+      right: 20px;
+    }
+
+    #lotteryGif {
+      width: 370px;
+      height: 370px;
+      margin: 20px auto;
+      display: none;
+    }
+
+    /* gif2 樣式調整 */
+    #gif2 {
+      position: fixed; /* 改為 fixed 定位 */
+      top: 0;
+      left: 0;
+      width: 100vw; /* 使用視窗寬度 */
+      height: 100vh; /* 使用視窗高度 */
+      opacity: 1.5; /* 調整透明度 */
+      display: none;
+      z-index: 100; /* 確保 gif2 在最上層 */
+    }
+  </style>
+</head>
+<body>
+  <!-- 背景影片 -->
+  <video autoplay muted loop id="video-background">
+    <source src="bg.mp4" type="video/mp4">
+    你的瀏覽器不支援 HTML5 影片播放。
+  </video>
+
+  <!-- 內容覆蓋 -->
+  <div class="content-overlay">
+    <h1></h1>
+
+    <div id="controls">
+      <button id="fetchBtn">載入最新名單</button>
+      <button id="clearDataBtn">清除中獎名單</button>
+      <br><br>
+      <label>一次抽出幾位</label>
+      <input type="number" id="drawCount" value="1" min="1" />
+      <button id="drawBtn">開始抽獎</button>
+    </div>
+
+    <img id="lotteryGif" src="gif1.gif" alt="Lottery GIF">
+    <img id="gif2" src="gif2.gif" alt="GIF 2">
+    <div id="winner">尚未載入名單</div>
+
+    <audio id="bgMusic" src="bgmusic1.mp3" loop></audio>
+    <button id="musicBtn">播放音樂</button>
+    <button id="updateMusicBtn">更新音樂</button>
+  </div>
+
+  <script>
+    // ============================
+    // 參數與全域變數
+    // ============================
+    const SCRIPT_URL = "-----------抽獎表單的網址------------"; // 替換成您的 Web App URL
+    const GIF_URL = "gif1.gif";   // 抽獎動畫 GIF1 的檔案路徑或網址
+    const GIF2_URL = "gif2.gif";   // 中獎後全屏 GIF 的檔案路徑或網址
+
+    // 修改成試算表中正確的欄位標題
+    const COL_B_NAME = "區域(例如:中和1區)";
+    const COL_C_NAME = "您的姓名";
+
+    let participants = [];
+    let gifVersion = 0; // GIF1 版本號
+    let gif2Version = 0; // GIF2 版本號
+
+    // ============================
+    // 強制更新 GIF 函數 (避免快取問題)
+    // ============================
+    function forceUpdateGif() {
+      gifVersion++;
+      gif2Version++;
+
+      const lotteryGif = document.getElementById('lotteryGif');
+      const gif2 = document.getElementById('gif2');
+      lotteryGif.src = `${GIF_URL}?v=${gifVersion}`;
+      gif2.src = `${GIF2_URL}?v=${gif2Version}`;
+      console.log("GIF 已強制更新");
+    }
+
+    // 每 3 秒更新一次 GIF (根據需求可調整)
+    //setInterval(forceUpdateGif, 3000);
+
+    // ============================
+    // 事件監聽與按鈕操作
+    // ============================
+    // 初始時顯示「載入最新名單」與「清除中獎名單」按鈕
+    document.getElementById('fetchBtn').style.display = 'block';
+    document.getElementById('clearDataBtn').style.display = 'block';
+
+    // 載入最新名單按鈕
+    document.getElementById('fetchBtn').addEventListener('click', async () => {
+      // 載入後隱藏按鈕，防止重複載入
+      document.getElementById('fetchBtn').style.display = 'none';
+
+      const winnerDiv = document.getElementById('winner');
+      winnerDiv.textContent = "載入中...";
+
+      const rawData = await fetchDataFromSheet();
+      if (rawData.length === 0) {
+        winnerDiv.textContent = "試算表目前沒有任何資料。";
+        // 若讀取不到資料則重新顯示載入按鈕
+        document.getElementById('fetchBtn').style.display = 'block';
+        return;
+      }
+
+      // 以對應欄位產生獨一無二的 key 並過濾姓名為空資料
+      const mapObj = {};
+      for (let i = 0; i < rawData.length; i++) {
+        const row = rawData[i];
+        let bVal = row[COL_B_NAME] || "";
+        let cVal = row[COL_C_NAME] || "";
+        bVal = String(bVal).trim();
+        cVal = String(cVal).trim();
+        if (!cVal) continue;
+
+        const key = bVal + "|" + cVal;
+        mapObj[key] = { region: bVal, name: cVal };
+      }
+
+      // 過濾掉已中獎的參加者
+      const newParticipants = Object.values(mapObj).filter(p => !isWinner(p));
+      participants = newParticipants;
+
+      winnerDiv.textContent = `載入完成，共 ${participants.length} 筆 (已排除已中獎者)`;
+      console.log("participants =", participants);
+    });
+
+    // 抽獎按鈕
+    document.getElementById('drawBtn').addEventListener('click', () => {
+      // 每次抽獎前顯示「載入最新名單」與「清除中獎名單」按鈕
+      document.getElementById('fetchBtn').style.display = 'block';
+      document.getElementById('clearDataBtn').style.display = 'block';
+
+      const winnerDiv = document.getElementById('winner');
+
+      if (participants.length === 0) {
+        winnerDiv.textContent = "名單已抽完或尚未載入。";
+        return;
+      }
+
+      const countInput = document.getElementById('drawCount');
+      let drawN = parseInt(countInput.value, 10);
+      if (isNaN(drawN) || drawN < 1) {
+        drawN = 1;
+      }
+      if (drawN > participants.length) {
+        drawN = participants.length;
+      }
+
+      // 顯示抽獎 GIF 動畫 (gif1)
+      const lotteryGif = document.getElementById('lotteryGif');
+      lotteryGif.style.display = 'block';
+      winnerDiv.textContent = `抽獎中... (預計抽出 ${drawN} 位)`;
+
+      // 設定 gif1 播放時間 (例如 5 秒) 後執行抽獎結果顯示
+      setTimeout(async () => {
+        // 隱藏抽獎動畫
+        lotteryGif.style.display = 'none';
+
+        let winnersArray = [];
+        for (let i = 0; i < drawN; i++) {
+          const rIndex = Math.floor(Math.random() * participants.length);
+          const w = participants[rIndex];
+          // 刪除已抽出的參加者
+          participants.splice(rIndex, 1);
+          winnersArray.push(w);
+        }
+
+        // 使用 innerHTML 顯示中獎名單及剩餘筆數
+        const names = winnersArray.map(w => `${w.region}/${w.name}`).join("；");
+        winnerDiv.innerHTML = `本次中獎：<span>${names}</span>，剩餘：${participants.length} 筆`;
+
+        // 顯示中獎後全屏 GIF (gif2)
+        const gif2 = document.getElementById('gif2');
+        gif2.style.display = 'block';
+
+        // 將中獎者加入 localStorage 中的已中獎名單
+        addWinnersToLocalStorage(winnersArray);
+
+        // 將所有中獎者一次性傳送到後端儲存至試算表
+        await saveWinnersToSheet(winnersArray);
+
+        // 全屏 GIF 顯示 4.5 秒後隱藏
+        setTimeout(() => {
+          gif2.style.display = 'none';
+        }, 4410);
+
+      }, 3000); // gif1 播放時間 5 秒
+    });
+
+    // 清除中獎名單按鈕
+    document.getElementById('clearDataBtn').addEventListener('click', async () => {
+      // 清除 localStorage 中的 'winners'
+      localStorage.removeItem('winners');
+
+      // 清除 Google 試算表中的 Winners 工作表資料
+      try {
+        const response = await fetch(SCRIPT_URL, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'clearWinners' }) // 傳送 action 參數給後端
+        });
+        const result = await response.json();
+        console.log('清除結果:', result);
+
+        if (result.success) {
+          alert('已清除中獎名單！');
+          // 隱藏「清除中獎名單」按鈕
+          document.getElementById('clearDataBtn').style.display = 'none';
+          // 顯示「載入最新名單」按鈕
+          document.getElementById('fetchBtn').style.display = 'block';
+        } else {
+          alert('清除中獎名單失敗: ' + (result.error || '未知錯誤'));
+        }
+      } catch (error) {
+        console.error('清除資料失敗:', error);
+        alert('清除中獎名單失敗!');
+      }
+    });
+
+    // ============================
+    // 背景音樂相關
+    // ============================
+    const bgMusic = document.getElementById('bgMusic');
+    const musicBtn = document.getElementById('musicBtn');
+    const updateMusicBtn = document.getElementById('updateMusicBtn');
+
+    musicBtn.addEventListener('click', () => {
+      if (bgMusic.paused) {
+        bgMusic.play();
+        musicBtn.textContent = "暫停音樂";
+      } else {
+        bgMusic.pause();
+        musicBtn.textContent = "播放音樂";
+      }
+    });
+
+    let musicVersion = 1;
+    function updateMusic() {
+      musicVersion++;
+      bgMusic.src = `bgmusic1.mp3?v=${musicVersion}`;
+      bgMusic.load();
+      console.log("音樂已更新");
+    }
+    updateMusicBtn.addEventListener('click', updateMusic);
+
+    // ============================
+    // 與後端溝通與資料存取函數
+    // ============================
+    // 從 Google 試算表取得資料
+    async function fetchDataFromSheet() {
+      try {
+        const resp = await fetch(SCRIPT_URL);
+        if (!resp.ok) throw new Error("讀取名單失敗: " + resp.status);
+        const data = await resp.json();
+        if (!Array.isArray(data)) return [];
+        return data;
+      } catch (err) {
+        console.error("fetchDataFromSheet error:", err);
+        return [];
+      }
+    }
+
+    // 一次性將所有中獎者資料儲存到 Google 試算表
+    async function saveWinnersToSheet(winnersArray) {
+      try {
+        const payload = {
+          action: 'saveWinners', // 新增 action 參數
+          winners: winnersArray   // 傳送中獎者陣列
+        };
+        const resp = await fetch(SCRIPT_URL, {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        const result = await resp.json();
+        console.log("saveWinnersToSheet:", result);
+      } catch (err) {
+        console.error("Error saving winners:", err);
+      }
+    }
+
+    // 將中獎者加入 localStorage 的 'winners' 名單
+    function addWinnersToLocalStorage(winners) {
+      const storedWinners = localStorage.getItem('winners');
+      const existingWinners = storedWinners ? JSON.parse(storedWinners) : [];
+      const updatedWinners = [...existingWinners, ...winners];
+      localStorage.setItem('winners', JSON.stringify(updatedWinners));
+    }
+
+    // 檢查某參加者是否已中獎
+    function isWinner(person) {
+      const storedWinners = localStorage.getItem('winners');
+      const winners = storedWinners ? JSON.parse(storedWinners) : [];
+      return winners.some(w => w.region === person.region && w.name === person.name);
+    }
+  </script>
+</body>
+</html>
